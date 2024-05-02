@@ -16,26 +16,28 @@
 # Copyright (C: Leibniz Centre for Agricultural Landscape Research (ZALF)
 
 from collections import defaultdict
-from datetime import date, timedelta
 import copy
+import csv
+from datetime import date, timedelta
 import json
+import math
+import numpy as np
 import os
+from pyproj import CRS, Transformer
 import sqlite3
+import sqlite3 as cas_sq3
 import sys
 import time
-
-import numpy as np
-from pyproj import CRS, Transformer
 import zmq
 import geopandas as gpd
 import rasterio
+from rasterio.transform import from_origin
 from rasterio import features
 
 import monica_io3
 import soil_io3
 import monica_run_lib as Mrunlib
 from irrigation_manager import IrrigationManager
-
 
 PATHS = {
     # adjust the local path to your environment
@@ -66,16 +68,6 @@ PATHS = {
         "path-to-data-dir": "./data/",  # mounted path to archive or hard drive with data
         "path-debug-write-folder": "./debug-out/",
     },
-    "mbm-local-local": {
-        # "include-file-base-path": "/home/berg/GitHub/monica-parameters/", # path to monica-parameters
-        "path-to-climate-dir": "/run/user/1000/gvfs/sftp:host=login01.cluster.zalf.de,user=rpm/beegfs/common/data/climate/",
-        # mounted path to archive or hard drive with climate data
-        "monica-path-to-climate-dir": "/run/user/1000/gvfs/sftp:host=login01.cluster.zalf.de,user=rpm/beegfs/common/data/climate/",
-        # mounted path to archive accessable by monica executable
-        "path-to-data-dir": "./data/",  # mounted path to archive or hard drive with data
-        "path-debug-write-folder": "./debug-out/",
-    },
-
     "remoteProducer-remoteMonica": {
         # "include-file-base-path": "/monica-parameters/", # path to monica-parameters
         "path-to-climate-dir": "/data/",  # mounted path to archive or hard drive with climate data
@@ -89,16 +81,17 @@ PATHS = {
 DATA_SOIL_DB = "germany/buek200.sqlite"
 DATA_GRID_HEIGHT = "germany/dem_1000_25832_etrs89-utm32n.asc"
 DATA_GRID_SLOPE = "germany/slope_1000_25832_etrs89-utm32n.asc"
-DATA_GRID_LAND_USE = "germany/landuse_1000_31469_gk5.asc"
+# DATA_GRID_LAND_USE = "germany/landuse_1000_31469_gk5.asc"
 DATA_GRID_SOIL = "germany/buek200_1000_25832_etrs89-utm32n.asc"
 DATA_GRID_SOIL_OW = "germany/buek200_1000_25832_etrs89-utm32n_OW.asc"
-DATA_GRID_CROPS = "germany/germany-crop-po_1000_25832_etrs89-utm32n.asc"  # crop map for potato
 # ORIGINAL DATA_GRID_SOIL = "germany/buek200_1000_25832_etrs89-utm32n.asc"
 # DATA_GRID_CROPS = "germany/crops-all2017-2019_1000_25832_etrs89-utm32n.asc"
 # DATA_GRID_CROPS = "germany/dwd-stations-pheno_1000_25832_etrs89-utm32n.asc"
-# DATA_GRID_CROPS = "germany/germany-complete_1000_25832_etrs89-utm32n.asc"
+# DATA_GRID_CROPS = "germany/germany-complete_1000_25832_etrs89-utm32n.asc"  # all crops
+DATA_GRID_CROPS = "germany/germany-crop-po_1000_25832_etrs89-utm32n.asc"  # potato
 DATA_GRID_IRRIGATION = "germany/irrigation_1000_25832_etrs89-utm32n_other_18.asc"
 TEMPLATE_PATH_LATLON = "{path_to_climate_dir}/latlon-to-rowcol.json"
+TEMPLATE_PATH_LATLON = "data/latlon-to-rowcol.json"
 TEMPLATE_PATH_CLIMATE_CSV = "{gcm}/{rcm}/{scenario}/{ensmem}/{version}/row-{crow}/col-{ccol}.csv"
 
 # Additional data for masking the regions
@@ -115,18 +108,17 @@ DEBUG_WRITE_FOLDER = "./debug_out"
 DEBUG_WRITE_CLIMATE = False
 
 
-## Add an argument in the run_producer function and make a loop with changing of the value of the additional parameter (sensitivity analysis)
-## Make a list of the parameter values first
-
 # commandline parameters e.g "server=localhost port=6666 shared_id=2"
 def run_producer(server={"server": None, "port": None}, shared_id=None):
+    "main"
+
     context = zmq.Context()
     socket = context.socket(zmq.PUSH)  # pylint: disable=no-member
     # config_and_no_data_socket = context.socket(zmq.PUSH)
 
     config = {
-        "mode": "mbm-local-remote",
-        "server-port": server["port"] if server["port"] else "6666",
+        "mode": "mbm-local-remote",  ## local:"cj-local-remote" remote "mbm-local-remote"
+        "server-port": server["port"] if server["port"] else "6666",  ## local: 6667, remote 6666
         "server": server["server"] if server["server"] else "login01.cluster.zalf.de",
         "start-row": "0",
         "end-row": "-1",
@@ -148,7 +140,7 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
 
     print("config:", config)
 
-    # select paths 
+    # select paths
     paths = PATHS[config["mode"]]
     # open soil db connection
     soil_db_con = sqlite3.connect(paths["path-to-data-dir"] + DATA_SOIL_DB)
@@ -163,10 +155,10 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
     for rsr in rs_ranges:
         rs_r = rsr.split("-")
         if 1 < len(rs_r) <= 2:
-            run_setups.extend(range(int(rs_r[0]), int(rs_r[1])+1))
+            run_setups.extend(range(int(rs_r[0]), int(rs_r[1]) + 1))
         elif len(rs_r) == 1:
             run_setups.append(int(rs_r[0]))
-    #run_setups = json.loads(config["run-setups"])
+    # run_setups = json.loads(config["run-setups"])
     print("read sim setups: ", config["setups-file"])
 
     # transforms geospatial coordinates from one coordinate reference system to another
@@ -215,15 +207,15 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
     print("read: ", path_to_slope_grid)
 
     # land use data
-    path_to_landuse_grid = paths["path-to-data-dir"] + DATA_GRID_LAND_USE
-    landuse_epsg_code = int(path_to_landuse_grid.split("/")[-1].split("_")[2])
-    landuse_crs = CRS.from_epsg(landuse_epsg_code)
-    if landuse_crs not in soil_crs_to_x_transformers:
-        soil_crs_to_x_transformers[landuse_crs] = Transformer.from_crs(soil_crs, landuse_crs)
-    landuse_meta, _ = Mrunlib.read_header(path_to_landuse_grid)
-    landuse_grid = np.loadtxt(path_to_landuse_grid, dtype=int, skiprows=6)
-    landuse_interpolate = Mrunlib.create_ascii_grid_interpolator(landuse_grid, landuse_meta)
-    print("read: ", path_to_landuse_grid)
+    # path_to_landuse_grid = paths["path-to-data-dir"] + DATA_GRID_LAND_USE
+    # landuse_epsg_code = int(path_to_landuse_grid.split("/")[-1].split("_")[2])
+    # landuse_crs = CRS.from_epsg(landuse_epsg_code)
+    # if landuse_crs not in soil_crs_to_x_transformers:
+    #     soil_crs_to_x_transformers[landuse_crs] = Transformer.from_crs(soil_crs, landuse_crs)
+    # landuse_meta, _ = Mrunlib.read_header(path_to_landuse_grid)
+    # landuse_grid = np.loadtxt(path_to_landuse_grid, dtype=int, skiprows=6)
+    # landuse_interpolate = Mrunlib.create_ascii_grid_interpolator(landuse_grid, landuse_meta)
+    # print("read: ", path_to_landuse_grid)
 
     # crop mask data
     path_to_crop_grid = paths["path-to-data-dir"] + DATA_GRID_CROPS
@@ -256,18 +248,17 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
         regions_df = gpd.read_file(NUTS3_REGIONS)
         region = regions_df[regions_df["NUTS_NAME"] == region_name]
 
-        # This is needed to read the transformation data correctly from the file. With the original opening it does not work
+        #This is needed to read the transformation data correctly from the file. With the original opening it does not work
         with rasterio.open(path_to_soil_grid) as dataset:
             soil_grid = dataset.read(1)
             transform = dataset.transform
 
         rows, cols = soil_grid.shape
-        mask = rasterio.features.geometry_mask([region.geometry.values[0]], out_shape=(rows, cols), transform=transform,
-                                               invert=True)
+        mask = rasterio.features.geometry_mask([region.geometry.values[0]], out_shape=(rows, cols), transform=transform, invert=True)
 
         return mask
 
-    sent_env_count = 0
+    sent_env_count = 1
     start_time = time.perf_counter()
 
     listOfClimateFiles = set()
@@ -291,15 +282,14 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
         ## extract crop_id from crop-id name that has possible an extenstion
         crop_id_short = crop_id.split('_')[0]
 
-        if region_name and len(region_name) > 0:
-            # Create the soil mask for the specific region
-            path_to_soil_grid_ow = paths["path-to-data-dir"] + DATA_GRID_SOIL_OW
-            mask = create_mask_from_shapefile(NUTS3_REGIONS, region_name, path_to_soil_grid_ow)
+        # Create the soil mask for the specific region
+        path_to_soil_grid_ow = paths["path-to-data-dir"] + DATA_GRID_SOIL_OW
+        mask = create_mask_from_shapefile(NUTS3_REGIONS, region_name, path_to_soil_grid_ow)
 
-            # Apply the soil mask to the soil grid
-            soil_grid_copy = soil_grid.copy()
-            soil_grid[mask == False] = -8888
-            soil_grid[soil_grid_copy == -9999] = -9999
+        # Apply the soil mask to the soil grid
+        soil_grid_copy = soil_grid.copy()
+        soil_grid[mask == False] = -8888
+        soil_grid[soil_grid_copy == -9999] = -9999
 
         # add crop id from setup file
         try:
@@ -324,10 +314,10 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
                                                                                                soil_crs, cdict)
         print("created climate_data to gk5 interpolator: ", path)
 
-        # read template sim.json 
+        # read template sim.json
         with open(setup.get("sim.json", config["sim.json"])) as _:
             sim_json = json.load(_)
-        # change start and end date according to setup
+        # change start and end date acording to setup
         if setup["start_date"]:
             sim_json["climate.csv-options"]["start-date"] = str(setup["start_date"])
         if setup["end_date"]:
@@ -375,9 +365,8 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
         print("All Rows x Cols: " + str(srows) + "x" + str(scols))
         # cs__ = open("coord_mapping_etrs89-utm32n_to_wgs84-latlon.csv", "w")
         # cs__.write("row,col,center_25832_etrs89-utm32n_r,center_25832_etrs89-utm32n_h,center_lat,center_lon\n")
-
         for srow in range(0, srows):
-            print(srow, end=", ")
+            print(srow, )
 
             if srow < int(config["start-row"]):
                 continue
@@ -405,7 +394,7 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
                         "crow": int(crow), "ccol": int(ccol),
                         "soil_id": soil_id,
                         "env_id": sent_env_count,
-                        "nodata": True,
+                        "nodata": True
                     }
                     if not DEBUG_DONOT_SEND:
                         socket.send_json(env_template)
@@ -568,7 +557,7 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
                         "crow": int(crow), "ccol": int(ccol),
                         "soil_id": soil_id,
                         "env_id": sent_env_count,
-                        "nodata": True,
+                        "nodata": True
                     }
                     if not DEBUG_DONOT_SEND:
                         socket.send_json(env_template)
@@ -576,14 +565,14 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
                         sent_env_count += 1
                     continue
 
-                # check if current grid cell is used for agriculture                
-                if setup["landcover"]:
-                    if landuse_crs not in tcoords:
-                        tcoords[landuse_crs] = soil_crs_to_x_transformers[landuse_crs].transform(sr, sh)
-                    lur, luh = tcoords[landuse_crs]
-                    landuse_id = landuse_interpolate(lur, luh)
-                    if landuse_id not in [2, 3, 4]:
-                        continue
+                # check if current grid cell is used for agriculture
+                # if setup["landcover"]:
+                #     if landuse_crs not in tcoords:
+                #         tcoords[landuse_crs] = soil_crs_to_x_transformers[landuse_crs].transform(sr, sh)
+                #     lur, luh = tcoords[landuse_crs]
+                #     landuse_id = landuse_interpolate(lur, luh)
+                #     if landuse_id not in [2, 3, 4]:
+                #         continue
 
                 if dem_crs not in tcoords:
                     tcoords[dem_crs] = soil_crs_to_x_transformers[dem_crs].transform(sr, sh)
@@ -594,11 +583,6 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
                     tcoords[slope_crs] = soil_crs_to_x_transformers[slope_crs].transform(sr, sh)
                 slr, slh = tcoords[slope_crs]
                 slope = slope_interpolate(slr, slh)
-
-                if irrigation_crs not in tcoords:
-                    tcoords[irrigation_crs] = soil_crs_to_x_transformers[irrigation_crs].transform(sr, sh)
-                irr_r, irr_h = tcoords[irrigation_crs]
-                irrigation = int(irrigation_interpolate(irr_r, irr_h))
 
                 env_template["params"]["userCropParameters"]["__enable_T_response_leaf_expansion__"] = setup[
                     "LeafExtensionModifier"]
@@ -673,7 +657,15 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
                 env_template["params"]["simulationParameters"]["UseNMinMineralFertilisingMethod"] = setup[
                     "fertilization"]
 
+                if irrigation_crs not in tcoords:
+                    tcoords[irrigation_crs] = soil_crs_to_x_transformers[irrigation_crs].transform(sr, sh)
+                ilr, ilh = tcoords[irrigation_crs]
+                irrigation = int(irrigation_interpolate(ilr, ilh))
+                print(f'irrigation grid cell value: {irrigation} for row: {srow}, col: {scol}')
+
                 # set UseAutomaticIrrigation to True if irrigation setup is True and irrigation is 1
+                # env_template["params"]["simulationParameters"]["UseAutomaticIrrigation"] = (
+                #         setup["irrigation"] and irrigation == 1)
                 if setup["irrigation"] and irrigation == 1:
                     # check if the crop type is in the irrigated crops map
                     if irrigation_manager.should_be_irrigated_by_crop_id(setup["crop-id"]):
@@ -681,11 +673,15 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
                         # add default values for irrigation amount and threshold
                         env_template["params"]["simulationParameters"]["AutoIrrigationParams"]["amount"] = [10, "mm"]
                         env_template["params"]["simulationParameters"]["AutoIrrigationParams"]["threshold"] = 0.3
-                    else:
-                        env_template["params"]["simulationParameters"]["UseAutomaticIrrigation"] = False
-                        # reset irrigation amount and threshold
-                        env_template["params"]["simulationParameters"]["AutoIrrigationParams"]["amount"] = [0, "mm"]
-                        env_template["params"]["simulationParameters"]["AutoIrrigationParams"]["threshold"] = 0.9
+                else:
+                    env_template["params"]["simulationParameters"]["UseAutomaticIrrigation"] = False
+                    # reset irrigation amount and threshold
+                    env_template["params"]["simulationParameters"]["AutoIrrigationParams"]["amount"] = [0, "mm"]
+                    env_template["params"]["simulationParameters"]["AutoIrrigationParams"]["threshold"] = 0.9
+                print(f'setup irrigation: {setup["irrigation"]}, irrigation grid cell value: {irrigation}')
+                print(f'UseAutomaticIrrigation: {env_template["params"]["simulationParameters"]["UseAutomaticIrrigation"]}')
+                print(f'irrigation amount: {env_template["params"]["simulationParameters"]["AutoIrrigationParams"]["amount"]}')
+                print(f'irrigation threshold: {env_template["params"]["simulationParameters"]["AutoIrrigationParams"]["threshold"]}')
 
                 env_template["params"]["simulationParameters"]["NitrogenResponseOn"] = setup["NitrogenResponseOn"]
                 env_template["params"]["simulationParameters"]["WaterDeficitResponseOn"] = setup[
@@ -780,8 +776,7 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
             # print("crows/cols:", crows_cols)
         # cs__.close()
         stop_setup_time = time.perf_counter()
-        print("\nSetup ", sent_env_count, " envs took ", (stop_setup_time - start_setup_time), " seconds")
-        sent_env_count = 0
+        print("Setup ", (sent_env_count - 1), " envs took ", (stop_setup_time - start_setup_time), " seconds")
 
     stop_time = time.perf_counter()
 
