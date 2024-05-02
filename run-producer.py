@@ -16,15 +16,16 @@
 # Copyright (C: Leibniz Centre for Agricultural Landscape Research (ZALF)
 
 from collections import defaultdict
-import copy
 from datetime import date, timedelta
+import copy
 import json
-import numpy as np
 import os
-from pyproj import CRS, Transformer
 import sqlite3
 import sys
 import time
+
+import numpy as np
+from pyproj import CRS, Transformer
 import zmq
 import geopandas as gpd
 import rasterio
@@ -34,6 +35,7 @@ import monica_io3
 import soil_io3
 import monica_run_lib as Mrunlib
 from irrigation_manager import IrrigationManager
+
 
 PATHS = {
     # adjust the local path to your environment
@@ -240,9 +242,9 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
     irrigation_crs = CRS.from_epsg(irrigation_epsg_code)
     if irrigation_crs not in soil_crs_to_x_transformers:
         soil_crs_to_x_transformers[irrigation_crs] = Transformer.from_crs(soil_crs, irrigation_crs)
-    irrigation_metadata, _ = Mrunlib.read_header(path_to_irrigation_grid)
+    irrigation_meta, _ = Mrunlib.read_header(path_to_irrigation_grid)
     irrigation_grid = np.loadtxt(path_to_irrigation_grid, dtype=int, skiprows=6)
-    irrigation_interpolate = Mrunlib.create_ascii_grid_interpolator(irrigation_grid, irrigation_metadata)
+    irrigation_interpolate = Mrunlib.create_ascii_grid_interpolator(irrigation_grid, irrigation_meta)
     print("read: ", path_to_irrigation_grid)
 
     # initialize irrigation manager
@@ -374,16 +376,6 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
         # cs__ = open("coord_mapping_etrs89-utm32n_to_wgs84-latlon.csv", "w")
         # cs__.write("row,col,center_25832_etrs89-utm32n_r,center_25832_etrs89-utm32n_h,center_lat,center_lon\n")
 
-        # for sensitivity analysis mode
-        is_sensitivity_analysis = False
-        orig_params = None
-        if setup["species_param_name"]:
-            if not orig_params:
-                orig_params = copy.deepcopy(env_template["cropRotation"][0]["worksteps"][0]["crop"]["cropParams"]["species"])
-        elif setup["cultivar_param_name"]:
-            if not orig_params:
-                orig_params = copy.deepcopy(env_template["cropRotation"][0]["worksteps"][0]["crop"]["cropParams"]["cultivar"])
-
         for srow in range(0, srows):
             print(srow, end=", ")
 
@@ -403,37 +395,6 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
                 # inter = crow/ccol encoded into integer
                 crow, ccol = climate_data_interpolator(sr, sh)
 
-                # OW: clim4cast sensitivity analysis
-                p_value = p_name = params = None
-                if setup["species_param_name"]:
-                    params = env_template["cropRotation"][0]["worksteps"][0]["crop"]["cropParams"]["species"]
-                    p_name = setup["species_param_name"]
-                elif setup["cultivar_param_name"]:
-                    params = env_template["cropRotation"][0]["worksteps"][0]["crop"]["cropParams"]["cultivar"]
-                    p_name = setup["cultivar_param_name"]
-                if setup["coeff"] and p_name and params and orig_params:
-                    # Case 3: List with a coefficient
-                    coefficient = float(setup["coeff"])
-                    is_sensitivity_analysis = True
-                    if type(orig_params[p_name]) is list and len(orig_params[p_name]) > 0:
-                        if type(orig_params[p_name][0]) is list:
-                            params[p_name][0] = list([float(val) * coefficient for val in orig_params[p_name][0]])
-                        else:
-                            params[p_name] = list([float(val) * coefficient for val in orig_params[p_name]])
-                elif setup["param_value"]:
-                    # Case 1: Single value or Case 2: List without coefficient
-                    p_value = float(setup["param_value"])
-                    is_sensitivity_analysis = True
-                    if params and p_name:
-                        if setup["param_index_in_array"]:
-                            i = int(setup["param_index_in_array"])
-                            if type(params[p_name][0]) is list:
-                                params[p_name][0][i] = p_value
-                            else:
-                                params[p_name][i] = p_value
-                        else:
-                            params[p_name] = p_value
-
                 crop_grid_id = int(crop_grid[srow, scol])
                 # print(crop_grid_id)
                 if crop_grid_id != 1 or soil_id == -8888:
@@ -445,9 +406,8 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
                         "soil_id": soil_id,
                         "env_id": sent_env_count,
                         "nodata": True,
-                        "is_sensitivity_analysis": is_sensitivity_analysis,
                     }
-                    if not is_sensitivity_analysis and not DEBUG_DONOT_SEND:
+                    if not DEBUG_DONOT_SEND:
                         socket.send_json(env_template)
                         # print("sent nodata env ", sent_env_count, " customId: ", env_template["customId"])
                         sent_env_count += 1
@@ -609,9 +569,8 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
                         "soil_id": soil_id,
                         "env_id": sent_env_count,
                         "nodata": True,
-                        "is_sensitivity_analysis": is_sensitivity_analysis
                     }
-                    if not is_sensitivity_analysis and not DEBUG_DONOT_SEND:
+                    if not DEBUG_DONOT_SEND:
                         socket.send_json(env_template)
                         # print("sent nodata env ", sent_env_count, " customId: ", env_template["customId"])
                         sent_env_count += 1
@@ -783,9 +742,6 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
                     "crow": int(crow), "ccol": int(ccol),
                     "soil_id": soil_id,
                     "env_id": sent_env_count,
-                    "is_sensitivity_analysis": is_sensitivity_analysis,
-                    "param_name": p_name,
-                    "param_value": p_value,
                     "nodata": False
                 }
 
@@ -820,15 +776,6 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
                         else:
                             print("WARNING: Row ", (sent_env_count - 1), " already exists")
             # print("unknown_soil_ids:", unknown_soil_ids)
-
-        if env_template and is_sensitivity_analysis:
-            env_template["pathToClimateCSV"] = ""
-            env_template["customId"] = {
-                "setup_id": setup_id,
-                "no_of_sent_envs": sent_env_count,
-                "is_sensitivity_analysis": is_sensitivity_analysis,
-            }
-            socket.send_json(env_template)
 
             # print("crows/cols:", crows_cols)
         # cs__.close()
