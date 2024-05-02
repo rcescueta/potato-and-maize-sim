@@ -72,7 +72,7 @@ def create_output(msg):
     cmcs = list(cm_count_to_vals.keys())
     cmcs.sort()
     last_cmc = cmcs[-1]
-    if "Year" not in cm_count_to_vals[last_cmc]:
+    if "year" not in cm_count_to_vals[last_cmc]:
         cm_count_to_vals.pop(last_cmc)
 
     return cm_count_to_vals
@@ -88,7 +88,7 @@ def write_row_to_grids(row_col_data, row, ncols, header, path_to_output_dir, pat
     make_dict_nparr = lambda: defaultdict(lambda: np.full((ncols,), -9999, dtype=np.float))
 
     output_grids = {
-        "Yield": {"data": make_dict_nparr(), "cast-to": "float", "digits": 1}
+        "Yield": {"data": make_dict_nparr(), "cast-to": "float", "digits": 1},
     }
     output_keys = list(output_grids.keys())
 
@@ -191,11 +191,11 @@ def write_row_to_grids(row_col_data, row, ncols, header, path_to_output_dir, pat
 
 
 def run_consumer(leave_after_finished_run=True, server={"server": None, "port": None}, shared_id=None):
-    """collect data from workers"""
+    "collect data from workers"
 
     config = {
-        "mode": "mbm-local-remote",
-        "port": server["port"] if server["port"] else "7777",
+        "mode": "mbm-local-remote",  ## remote "mbm-local-remote", local "cj-local-remote"
+        "port": server["port"] if server["port"] else "7777",  ## local 7778,  remote 7777
         "server": server["server"] if server["server"] else "login01.cluster.zalf.de",
         "start-row": "0",
         "end-row": "-1",
@@ -263,7 +263,7 @@ def run_consumer(leave_after_finished_run=True, server={"server": None, "port": 
                 sh = yllcorner + (scellsize / 2) + (srows - srow - 1) * scellsize
                 sr = xllcorner + (scellsize / 2) + scol * scellsize
 
-                # check if current grid cell is used for agriculture                
+                # check if current grid cell is used for agriculture
                 lur, luh = landuse_transformer(sh, sr)
                 landuse_id = landuse_interpolate(lur, luh)
                 if landuse_id not in [2, 3, 4]:
