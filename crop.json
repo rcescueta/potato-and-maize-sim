@@ -378,7 +378,7 @@
 		}]
 	},
 
-	"cropRotation": ["ref", "cropRotationTemplates", "WW"],
+	"cropRotation": ["ref", "cropRotationTemplates", "PO"],
 	
 	"CropParameters": {
 		"=": ["include-from-file", "general/crop.json"],
