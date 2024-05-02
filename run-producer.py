@@ -17,21 +17,17 @@
 
 from collections import defaultdict
 import copy
-import csv
 from datetime import date, timedelta
 import json
-import math
 import numpy as np
 import os
 from pyproj import CRS, Transformer
 import sqlite3
-import sqlite3 as cas_sq3
 import sys
 import time
 import zmq
 import geopandas as gpd
 import rasterio
-from rasterio.transform import from_origin
 from rasterio import features
 
 import monica_io3
@@ -94,7 +90,7 @@ DATA_GRID_SLOPE = "germany/slope_1000_25832_etrs89-utm32n.asc"
 DATA_GRID_LAND_USE = "germany/landuse_1000_31469_gk5.asc"
 DATA_GRID_SOIL = "germany/buek200_1000_25832_etrs89-utm32n.asc"
 DATA_GRID_SOIL_OW = "germany/buek200_1000_25832_etrs89-utm32n_OW.asc"
-DATA_GRID_CROPS = "germany/OWgermany-crop-ww_1000_25832_etrs89-utm32n.asc"  # Added as a cropmap for winter wheat OW
+DATA_GRID_CROPS = "germany/germany-crop-po_1000_25832_etrs89-utm32n.asc"  # crop map for potato
 # ORIGINAL DATA_GRID_SOIL = "germany/buek200_1000_25832_etrs89-utm32n.asc"
 # DATA_GRID_CROPS = "germany/crops-all2017-2019_1000_25832_etrs89-utm32n.asc"
 # DATA_GRID_CROPS = "germany/dwd-stations-pheno_1000_25832_etrs89-utm32n.asc"
