@@ -17,18 +17,18 @@
             "Precipitation": "precip",
             "RelHumCalc": ["relhumid", "*", 100.0],
 			"Radiation": ["globrad", "/", 1000.0],
-			"Windspeed": "wind"
+			"Windspeed": "windspeed"
         }
     },
-	
+
 	"debug?": false,
 	"path-to-output": "./",
 	"include-file-base-path": "data/params/",
-	
-	"output": { 
+
+	"output": {
 	  "write-file?": false,
 		"file-name": "out.csv",
-	
+
 		"csv-options": {
 			"include-header-row": true,
 			"include-units-row": false,
@@ -42,17 +42,7 @@
 				["CM-count", "FIRST"],
 				["Year", "LAST"],
 				["Crop", "FIRST"],
-				["Yield", "LAST"],
-				["AbBiom", "LAST"]
-			],
-			"yearly", [
-				["CM-count", "LAST"],
-				["Year", "LAST"],
-				["Crop", "LAST"],
-				["HeatRed", "AVG"],
-				["FrostRed", "AVG"],
-				["Nstress", "AVG"],
-				["Globrad", "SUM"]
+				["Yield", "LAST"]
 			]
 		]
 	},
