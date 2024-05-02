@@ -132,7 +132,7 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
         "sim.json": "sim_final.json",
         "crop.json": "crop_final.json",
         "site.json": "site.json",
-        "setups-file": "sim_setups_OW.csv",
+        "setups-file": "sim_setups.csv",
         "run-setups": "[1]",
         "shared_id": shared_id
     }
@@ -242,7 +242,7 @@ def run_producer(server={"server": None, "port": None}, shared_id=None):
         soil_crs_to_x_transformers[irrigation_crs] = Transformer.from_crs(soil_crs, irrigation_crs)
     irrigation_metadata, _ = Mrunlib.read_header(path_to_irrigation_grid)
     irrigation_grid = np.loadtxt(path_to_irrigation_grid, dtype=int, skiprows=6)
-    irrigation_interpolate = Mrunlib.create_ascii_grid_interpolator(irrigation_grid, irrigation_metadata, False)
+    irrigation_interpolate = Mrunlib.create_ascii_grid_interpolator(irrigation_grid, irrigation_metadata)
     print("read: ", path_to_irrigation_grid)
 
     # initialize irrigation manager
